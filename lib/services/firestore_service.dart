@@ -54,6 +54,7 @@ class FirestoreService {
   }
 
   // Attendance
+  // Attendance
    Stream<List<AttendanceModel>> getAttendance(String courseId, DateTime date) {
      // Start of day
      final start = DateTime(date.year, date.month, date.day);
@@ -61,6 +62,19 @@ class FirestoreService {
      
      return _db.collection('attendance')
         .where('courseId', isEqualTo: courseId)
+        .where('date', isGreaterThanOrEqualTo: Timestamp.fromDate(start))
+        .where('date', isLessThan: Timestamp.fromDate(end))
+        .snapshots()
+        .map((snapshot) =>
+            snapshot.docs.map((doc) => AttendanceModel.fromMap(doc.data(), doc.id)).toList());
+  }
+
+  // General Daily Attendance (No Course Filter)
+   Stream<List<AttendanceModel>> getDailyAttendance(DateTime date) {
+     final start = DateTime(date.year, date.month, date.day);
+     final end = start.add(const Duration(days: 1));
+     
+     return _db.collection('attendance')
         .where('date', isGreaterThanOrEqualTo: Timestamp.fromDate(start))
         .where('date', isLessThan: Timestamp.fromDate(end))
         .snapshots()

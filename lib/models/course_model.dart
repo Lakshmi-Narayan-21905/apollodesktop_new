@@ -49,4 +49,17 @@ class CourseModel {
       'studentIds': studentIds,
     };
   }
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+  
+    return other is CourseModel &&
+      other.id == id &&
+      other.title == title &&
+      other.fees == fees;
+  }
+
+  @override
+  int get hashCode => id.hashCode ^ title.hashCode ^ fees.hashCode;
 }

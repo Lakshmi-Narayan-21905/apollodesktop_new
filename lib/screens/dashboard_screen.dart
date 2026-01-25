@@ -1,12 +1,32 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+import '../services/firestore_service.dart';
+import '../models/user_model.dart';
+import '../models/course_model.dart';
 import 'students_screen.dart';
 import 'faculty_screen.dart';
 import 'courses_screen.dart';
 import 'attendance_screen.dart';
 import 'reports_screen.dart';
 
-class DashboardScreen extends StatelessWidget {
+class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
+
+  @override
+  State<DashboardScreen> createState() => _DashboardScreenState();
+}
+
+class _DashboardScreenState extends State<DashboardScreen> {
+  late Stream<List<UserModel>> _studentsStream;
+  late Stream<List<CourseModel>> _coursesStream;
+
+  @override
+  void initState() {
+    super.initState();
+    final service = Provider.of<FirestoreService>(context, listen: false);
+    _studentsStream = service.getStudents();
+    _coursesStream = service.getCourses();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -75,7 +95,7 @@ class DashboardScreen extends StatelessWidget {
             ListTile(
               leading: const Icon(Icons.logout),
               title: const Text('Logout'),
-              onTap: () {}, // TODO: Implement logout
+              onTap: () {}, 
             ),
             const SizedBox(height: 16),
           ],
@@ -89,13 +109,55 @@ class DashboardScreen extends StatelessWidget {
             Text('Overview', style: Theme.of(context).textTheme.headlineMedium?.copyWith(fontWeight: FontWeight.bold, color: Colors.deepPurple)),
             const SizedBox(height: 24),
             // Stats Row
-            const Row(
+            Row(
               children: [
-                Expanded(child: _StatCard(title: 'Total Students', value: '1,200', icon: Icons.school, color: Colors.blue)),
-                SizedBox(width: 16),
-                Expanded(child: _StatCard(title: 'Active Courses', value: '45', icon: Icons.library_books, color: Colors.orange)),
-                SizedBox(width: 16),
-                Expanded(child: _StatCard(title: 'Attendance', value: '92%', icon: Icons.check_circle, color: Colors.green)),
+                Expanded(
+                  child: StreamBuilder<List<UserModel>>(
+                    stream: _studentsStream,
+                    builder: (context, snapshot) {
+                      final count = snapshot.data?.length ?? 0;
+                      return _StatCard(title: 'Total Students', value: count.toString(), icon: Icons.school, color: Colors.blue);
+                    },
+                  ),
+                ),
+                const SizedBox(width: 16),
+                Expanded(
+                  child: StreamBuilder<List<CourseModel>>(
+                    stream: _coursesStream,
+                    builder: (context, snapshot) {
+                      final count = snapshot.data?.length ?? 0;
+                      return _StatCard(title: 'Active Courses', value: count.toString(), icon: Icons.library_books, color: Colors.orange);
+                    },
+                  ),
+                ),
+                const SizedBox(width: 16),
+                Expanded(
+                  child: StreamBuilder<List<CourseModel>>(
+                    stream: _coursesStream,
+                    builder: (context, courseSnapshot) {
+                      return StreamBuilder<List<UserModel>>(
+                        stream: _studentsStream,
+                        builder: (context, studentSnapshot) {
+                          double revenue = 0;
+                          if (courseSnapshot.hasData && studentSnapshot.hasData) {
+                             final courses = courseSnapshot.data!;
+                             final students = studentSnapshot.data!;
+                             
+                             // Map course ID to fees for O(1) lookup
+                             final courseFees = {for (var c in courses) c.id: c.fees};
+                             
+                             for (var student in students) {
+                               for (var enrolledId in student.enrolledCourseIds) {
+                                  revenue += courseFees[enrolledId] ?? 0;
+                               }
+                             }
+                          }
+                          return _StatCard(title: 'Revenue', value: '₹${revenue.toStringAsFixed(0)}', icon: Icons.currency_rupee, color: Colors.green);
+                        },
+                      );
+                    },
+                  ),
+                ),
               ],
             ),
             const SizedBox(height: 48),

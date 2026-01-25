@@ -15,10 +15,67 @@ class AttendanceScreen extends StatefulWidget {
 }
 
 class _AttendanceScreenState extends State<AttendanceScreen> {
-  CourseModel? selectedCourse;
   DateTime selectedDate = DateTime.now();
   List<UserModel> students = [];
   bool isLoadingStudents = false;
+
+  @override
+  void initState() {
+    super.initState();
+    // Defer loading to allow provider context access if needed, or just run valid logic
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _loadStudents(Provider.of<FirestoreService>(context, listen: false));
+    });
+  }
+
+  Future<void> _loadStudents(FirestoreService service) async {
+    setState(() => isLoadingStudents = true);
+    
+    // Fetch all students
+    final allStudentsStream = service.getStudents();
+    final allStudents = await allStudentsStream.first;
+    
+    setState(() {
+      students = allStudents;
+      isLoadingStudents = false;
+    });
+  }
+
+  Future<void> _pickTime(BuildContext context, AttendanceModel record, FirestoreService service, {required bool isInTime}) async {
+    if (record.status != 'Present') return; 
+
+    final initial = isInTime ? record.checkInTime : record.checkOutTime;
+    final picked = await showTimePicker(
+      context: context,
+      initialTime: initial != null ? TimeOfDay.fromDateTime(initial) : TimeOfDay.now(),
+    );
+
+    if (picked != null) {
+      final dt = DateTime(selectedDate.year, selectedDate.month, selectedDate.day, picked.hour, picked.minute);
+      if (isInTime) {
+        _saveAttendance(service, record, checkInTime: dt);
+      } else {
+         _saveAttendance(service, record, checkOutTime: dt);
+      }
+    }
+  }
+
+  void _saveAttendance(FirestoreService service, AttendanceModel record, {String? status, DateTime? checkInTime, DateTime? checkOutTime}) {
+    // Force courseId to 'general' if empty or not set, to match our "No Course" strategy
+    final courseId = 'general'; 
+    
+    final updated = AttendanceModel(
+      // Ensure ID uniqueness logic matches the query
+      id: record.id.isEmpty ? '${courseId}_${record.studentId}_${DateFormat('yyyyMMdd').format(record.date)}' : record.id,
+      studentId: record.studentId,
+      courseId: courseId, 
+      date: record.date,
+      status: status ?? record.status,
+      checkInTime: checkInTime ?? record.checkInTime,
+      checkOutTime: checkOutTime ?? record.checkOutTime,
+    );
+    service.saveAttendance(updated);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -30,30 +87,9 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
         padding: const EdgeInsets.all(16.0),
         child: Column(
           children: [
-            // Controls
+            // Controls (Date Only)
             Row(
               children: [
-                Expanded(
-                  child: StreamBuilder<List<CourseModel>>(
-                    stream: firestoreService.getCourses(),
-                    builder: (context, snapshot) {
-                      if (!snapshot.hasData) return const LinearProgressIndicator();
-                      final courses = snapshot.data!;
-                      return DropdownButtonFormField<CourseModel>(
-                        value: selectedCourse,
-                        hint: const Text('Select Course'),
-                        items: courses.map((c) => DropdownMenuItem(value: c, child: Text(c.title))).toList(),
-                        onChanged: (val) {
-                          setState(() {
-                            selectedCourse = val;
-                            _loadStudents(firestoreService);
-                          });
-                        },
-                      );
-                    },
-                  ),
-                ),
-                const SizedBox(width: 16),
                 Expanded(
                   child: TextField(
                     readOnly: true,
@@ -61,6 +97,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
                     decoration: const InputDecoration(
                       labelText: 'Date',
                       suffixIcon: Icon(Icons.calendar_today),
+                      border: OutlineInputBorder(),
                     ),
                     onTap: () async {
                       final picked = await showDatePicker(
@@ -80,10 +117,8 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
             const SizedBox(height: 16),
             // Table
             Expanded(
-              child: selectedCourse == null
-                  ? const Center(child: Text('Please select a course'))
-                  : StreamBuilder<List<AttendanceModel>>(
-                      stream: firestoreService.getAttendance(selectedCourse!.id, selectedDate),
+              child: StreamBuilder<List<AttendanceModel>>(
+                      stream: firestoreService.getDailyAttendance(selectedDate),
                       builder: (context, snapshot) {
                         if (isLoadingStudents) return const Center(child: CircularProgressIndicator());
                         
@@ -95,49 +130,65 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
                           minWidth: 800,
                           columns: const [
                             DataColumn2(label: Text('Student'), size: ColumnSize.L),
-                            DataColumn2(label: Text('Status'), size: ColumnSize.S),
+                            DataColumn2(label: Text('Present'), size: ColumnSize.S),
                             DataColumn2(label: Text('In Time'), size: ColumnSize.M),
                             DataColumn2(label: Text('Out Time'), size: ColumnSize.M),
                             DataColumn2(label: Text('Total Hours'), size: ColumnSize.S),
-                            DataColumn2(label: Text('Action'), size: ColumnSize.S),
                           ],
                           rows: students.map((student) {
-                            // Find existing record
+                            // Find existing record for this student on this day
                             final record = records.firstWhere(
                               (r) => r.studentId == student.uid,
                               orElse: () => AttendanceModel(
                                 id: '',
                                 studentId: student.uid,
-                                courseId: selectedCourse!.id,
+                                courseId: 'general',
                                 date: selectedDate,
                                 status: 'Absent',
                               ),
                             );
 
+                            final isPresent = record.status == 'Present';
+
                             return DataRow(cells: [
                               DataCell(Text(student.name)),
-                              DataCell(DropdownButton<String>(
-                                value: record.status,
-                                items: ['Present', 'Absent', 'Late'].map((s) => DropdownMenuItem(value: s, child: Text(s))).toList(),
+                              DataCell(Checkbox(
+                                value: isPresent,
                                 onChanged: (val) {
-                                  _saveAttendance(firestoreService, record, status: val);
+                                  _saveAttendance(firestoreService, record, status: (val == true) ? 'Present' : 'Absent');
                                 },
                               )),
                               DataCell(InkWell(
-                                onTap: () => _pickTime(context, record, firestoreService, isInTime: true),
-                                child: Text(record.checkInTime != null ? DateFormat('HH:mm').format(record.checkInTime!) : '--:--'),
+                                onTap: isPresent ? () => _pickTime(context, record, firestoreService, isInTime: true) : null,
+                                child: Opacity(
+                                  opacity: isPresent ? 1.0 : 0.5,
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
+                                    decoration: BoxDecoration(
+                                      border: Border.all(color: Colors.grey.shade300),
+                                      borderRadius: BorderRadius.circular(4),
+                                    ),
+                                    child: Text(record.checkInTime != null ? DateFormat('HH:mm').format(record.checkInTime!) : '--:--', style: const TextStyle(fontWeight: FontWeight.bold)),
+                                  ),
+                                ),
                               )),
                               DataCell(InkWell(
-                                onTap: () => _pickTime(context, record, firestoreService, isInTime: false),
-                                child: Text(record.checkOutTime != null ? DateFormat('HH:mm').format(record.checkOutTime!) : '--:--'),
+                                onTap: isPresent ? () => _pickTime(context, record, firestoreService, isInTime: false) : null,
+                                child: Opacity(
+                                  opacity: isPresent ? 1.0 : 0.5,
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
+                                    decoration: BoxDecoration(
+                                      border: Border.all(color: Colors.grey.shade300),
+                                      borderRadius: BorderRadius.circular(4),
+                                    ),
+                                    child: Text(record.checkOutTime != null ? DateFormat('HH:mm').format(record.checkOutTime!) : '--:--', style: const TextStyle(fontWeight: FontWeight.bold)),
+                                  ),
+                                ),
                               )),
                               DataCell(Text((record.checkInTime != null && record.checkOutTime != null)
                                   ? '${record.checkOutTime!.difference(record.checkInTime!).inHours}h'
                                   : '-')),
-                              DataCell(IconButton(
-                                icon: const Icon(Icons.save, color: Colors.blue),
-                                onPressed: () => _saveAttendance(firestoreService, record), // Manual save if needed, though inputs auto-save
-                              )),
                             ]);
                           }).toList(),
                         );
@@ -148,45 +199,5 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
         ),
       ),
     );
-  }
-
-  Future<void> _loadStudents(FirestoreService service) async {
-    if (selectedCourse == null) return;
-    setState(() => isLoadingStudents = true);
-    final loaded = await service.getStudentsByIds(selectedCourse!.studentIds);
-    setState(() {
-      students = loaded;
-      isLoadingStudents = false;
-    });
-  }
-
-  Future<void> _pickTime(BuildContext context, AttendanceModel record, FirestoreService service, {required bool isInTime}) async {
-    final initial = isInTime ? record.checkInTime : record.checkOutTime;
-    final picked = await showTimePicker(
-      context: context,
-      initialTime: initial != null ? TimeOfDay.fromDateTime(initial) : TimeOfDay.now(),
-    );
-
-    if (picked != null) {
-      final dt = DateTime(selectedDate.year, selectedDate.month, selectedDate.day, picked.hour, picked.minute);
-      if (isInTime) {
-        _saveAttendance(service, record, checkInTime: dt);
-      } else {
-         _saveAttendance(service, record, checkOutTime: dt);
-      }
-    }
-  }
-
-  void _saveAttendance(FirestoreService service, AttendanceModel record, {String? status, DateTime? checkInTime, DateTime? checkOutTime}) {
-    final updated = AttendanceModel(
-      id: record.id.isEmpty ? '${record.courseId}_${record.studentId}_${DateFormat('yyyyMMdd').format(record.date)}' : record.id,
-      studentId: record.studentId,
-      courseId: record.courseId,
-      date: record.date,
-      status: status ?? record.status,
-      checkInTime: checkInTime ?? record.checkInTime,
-      checkOutTime: checkOutTime ?? record.checkOutTime,
-    );
-    service.saveAttendance(updated);
   }
 }

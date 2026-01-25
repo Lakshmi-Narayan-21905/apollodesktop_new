@@ -106,7 +106,7 @@ class _CoursesScreenState extends State<CoursesScreen> {
               const SizedBox(height: 16),
               _DetailItem(label: 'Description', value: course.description),
               _DetailItem(label: 'Instructor', value: instructors.isEmpty ? 'Unassigned' : instructors),
-              _DetailItem(label: 'Fees', value: '\$${course.fees}'),
+              _DetailItem(label: 'Fees', value: '₹${course.fees}'),
               _DetailItem(label: 'Duration', value: '${course.durationDays} Days'),
               _DetailItem(label: 'Subjects', value: course.subjects.join(', ')),
               _DetailItem(label: 'Enrolled Students', value: '${course.studentIds.length}'),
