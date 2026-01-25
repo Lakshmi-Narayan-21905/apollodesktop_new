@@ -23,12 +23,12 @@ class _FacultyScreenState extends State<FacultyScreen> {
       body: Padding(
         padding: const EdgeInsets.all(16.0),
         child: StreamBuilder<List<UserModel>>(
-          stream: firestoreService.getUsers(),
+          stream: firestoreService.getFaculty(),
           builder: (context, snapshot) {
             if (snapshot.hasError) return Text('Error: ${snapshot.error}');
             if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
 
-            final users = snapshot.data!.where((u) => u.role == 'teacher').toList();
+            final users = snapshot.data!;
             
             return DataTable2(
               columnSpacing: 12,
@@ -52,7 +52,7 @@ class _FacultyScreenState extends State<FacultyScreen> {
                 DataCell(Row(
                   children: [
                     IconButton(icon: const Icon(Icons.edit), onPressed: () => _showFacultyDialog(context, user)),
-                    IconButton(icon: const Icon(Icons.delete, color: Colors.red), onPressed: () => firestoreService.deleteUser(user.uid)),
+                    IconButton(icon: const Icon(Icons.delete, color: Colors.red), onPressed: () => firestoreService.deleteFaculty(user.uid)),
                   ],
                 )),
               ])).toList(),
@@ -287,7 +287,7 @@ class _FacultyScreenState extends State<FacultyScreen> {
                                   role: 'teacher',
                                 );
                                 
-                                await firestoreService.saveUser(newUser);
+                                await firestoreService.saveFaculty(newUser);
                                 if (context.mounted) Navigator.pop(context);
                               },
                               icon: const Icon(Icons.save),

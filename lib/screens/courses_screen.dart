@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:data_table_2/data_table_2.dart';
 import '../models/course_model.dart';
+import '../models/user_model.dart'; // Import UserModel
 import '../services/firestore_service.dart';
 
 class CoursesScreen extends StatefulWidget {
@@ -22,35 +23,55 @@ class _CoursesScreenState extends State<CoursesScreen> {
         padding: const EdgeInsets.all(16.0),
         child: StreamBuilder<List<CourseModel>>(
           stream: firestoreService.getCourses(),
-          builder: (context, snapshot) {
-            if (snapshot.hasError) return Text('Error: ${snapshot.error}');
-            if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
+          builder: (context, courseSnapshot) {
+            if (courseSnapshot.hasError) return Text('Error: ${courseSnapshot.error}');
+            if (!courseSnapshot.hasData) return const Center(child: CircularProgressIndicator());
 
-            final courses = snapshot.data!;
-            return DataTable2(
-              columnSpacing: 12,
-              horizontalMargin: 12,
-              minWidth: 800,
-              showCheckboxColumn: false,
-              columns: const [
-                DataColumn2(label: Text('Course Name'), size: ColumnSize.L),
-                DataColumn2(label: Text('Student Count'), size: ColumnSize.S),
-                DataColumn2(label: Text('Instructor'), size: ColumnSize.M),
-                DataColumn2(label: Text('Actions'), size: ColumnSize.S),
-              ],
-              rows: courses.map((course) => DataRow(
-                onSelectChanged: (_) => _showCourseDetails(context, course),
-                cells: [
-                DataCell(Text(course.title, style: const TextStyle(fontWeight: FontWeight.bold))),
-                DataCell(Text(course.studentIds.length.toString())),
-                DataCell(Text(course.instructor)),
-                DataCell(Row(
-                  children: [
-                    IconButton(icon: const Icon(Icons.edit), onPressed: () => _showCourseDialog(context, course)),
-                    IconButton(icon: const Icon(Icons.delete, color: Colors.red), onPressed: () => firestoreService.deleteCourse(course.id)),
+            final courses = courseSnapshot.data!;
+
+            // Nested StreamBuilder to get faculty data for mapping
+            return StreamBuilder<List<UserModel>>(
+              stream: firestoreService.getFaculty(),
+              builder: (context, facultySnapshot) {
+                if (!facultySnapshot.hasData) return const Center(child: CircularProgressIndicator());
+                
+                final facultyList = facultySnapshot.data!;
+
+                return DataTable2(
+                  columnSpacing: 12,
+                  horizontalMargin: 12,
+                  minWidth: 800,
+                  showCheckboxColumn: false,
+                  columns: const [
+                    DataColumn2(label: Text('Course Name'), size: ColumnSize.L),
+                    DataColumn2(label: Text('Student Count'), size: ColumnSize.S),
+                    DataColumn2(label: Text('Instructor'), size: ColumnSize.M),
+                    DataColumn2(label: Text('Actions'), size: ColumnSize.S),
                   ],
-                )),
-              ])).toList(),
+                  rows: courses.map((course) {
+                    // Find faculty who have this course ID in their enrolled/assigned list
+                    final instructors = facultyList
+                        .where((f) => f.enrolledCourseIds.contains(course.id))
+                        .map((f) => f.name)
+                        .join(', ');
+
+                    return DataRow(
+                      onSelectChanged: (_) => _showCourseDetails(context, course, instructors),
+                      cells: [
+                        DataCell(Text(course.title, style: const TextStyle(fontWeight: FontWeight.bold))),
+                        DataCell(Text(course.studentIds.length.toString())),
+                        DataCell(Text(instructors.isEmpty ? 'Unassigned' : instructors)),
+                        DataCell(Row(
+                          children: [
+                            IconButton(icon: const Icon(Icons.edit), onPressed: () => _showCourseDialog(context, course)),
+                            IconButton(icon: const Icon(Icons.delete, color: Colors.red), onPressed: () => firestoreService.deleteCourse(course.id)),
+                          ],
+                        )),
+                      ],
+                    );
+                  }).toList(),
+                );
+              }
             );
           },
         ),
@@ -62,7 +83,7 @@ class _CoursesScreenState extends State<CoursesScreen> {
     );
   }
 
-  void _showCourseDetails(BuildContext context, CourseModel course) {
+  void _showCourseDetails(BuildContext context, CourseModel course, String instructors) {
     showDialog(
       context: context,
       builder: (context) => Dialog(
@@ -84,7 +105,7 @@ class _CoursesScreenState extends State<CoursesScreen> {
               const Divider(),
               const SizedBox(height: 16),
               _DetailItem(label: 'Description', value: course.description),
-              _DetailItem(label: 'Instructor', value: course.instructor),
+              _DetailItem(label: 'Instructor', value: instructors.isEmpty ? 'Unassigned' : instructors),
               _DetailItem(label: 'Fees', value: '\$${course.fees}'),
               _DetailItem(label: 'Duration', value: '${course.durationDays} Days'),
               _DetailItem(label: 'Subjects', value: course.subjects.join(', ')),
@@ -100,7 +121,6 @@ class _CoursesScreenState extends State<CoursesScreen> {
   void _showCourseDialog(BuildContext context, CourseModel? course) {
     final titleController = TextEditingController(text: course?.title ?? '');
     final descriptionController = TextEditingController(text: course?.description ?? '');
-    final instructorController = TextEditingController(text: course?.instructor ?? '');
     final feesController = TextEditingController(text: course?.fees.toString() ?? '0');
     final durationController = TextEditingController(text: course?.durationDays.toString() ?? '30');
     final subjectsController = TextEditingController(text: course?.subjects.join(', ') ?? '');
@@ -110,7 +130,7 @@ class _CoursesScreenState extends State<CoursesScreen> {
       builder: (context) => Dialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         child: Container(
-          width: 800, // Make it big as requested
+          width: 800,
           padding: const EdgeInsets.all(32),
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -120,7 +140,7 @@ class _CoursesScreenState extends State<CoursesScreen> {
                 style: Theme.of(context).textTheme.headlineMedium?.copyWith(color: Colors.deepPurple, fontWeight: FontWeight.bold)),
               const SizedBox(height: 24),
               Row(
-                crossAxisAlignment: CrossAxisAlignment.start, // Align top
+                crossAxisAlignment: CrossAxisAlignment.start, 
                 children: [
                   Expanded(
                     child: Column(
@@ -128,8 +148,6 @@ class _CoursesScreenState extends State<CoursesScreen> {
                         TextField(controller: titleController, decoration: const InputDecoration(labelText: 'Course Title', prefixIcon: Icon(Icons.title))),
                         const SizedBox(height: 16),
                         TextField(controller: descriptionController, decoration: const InputDecoration(labelText: 'Description', prefixIcon: Icon(Icons.description)), maxLines: 3),
-                        const SizedBox(height: 16),
-                        TextField(controller: instructorController, decoration: const InputDecoration(labelText: 'Instructor Name', prefixIcon: Icon(Icons.person))),
                       ],
                     ),
                   ),
@@ -170,7 +188,7 @@ class _CoursesScreenState extends State<CoursesScreen> {
                         id: id,
                         title: titleController.text,
                         description: descriptionController.text,
-                        instructor: instructorController.text,
+                        instructor: '', // No manual instructor
                         fees: double.tryParse(feesController.text) ?? 0,
                         durationDays: int.tryParse(durationController.text) ?? 0,
                         createdAt: course?.createdAt ?? DateTime.now(),
