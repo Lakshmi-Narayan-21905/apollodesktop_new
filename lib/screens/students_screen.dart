@@ -287,6 +287,10 @@ class _StudentsScreenState extends State<StudentsScreen> {
                                   role: 'student',
                                 );
                                 
+                                // Update course enrollments (sync student ID in course docs)
+                                final oldCourseIds = user?.enrolledCourseIds ?? [];
+                                await firestoreService.updateCourseEnrollments(uid, oldCourseIds, selectedCourseIds);
+
                                 await firestoreService.saveStudent(newUser);
                                 if (context.mounted) Navigator.pop(context);
                               },

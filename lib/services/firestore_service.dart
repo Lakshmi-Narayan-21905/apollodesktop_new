@@ -114,6 +114,32 @@ class FirestoreService {
   
 
 
+  Future<void> updateCourseEnrollments(String studentId, List<String> oldCourseIds, List<String> newCourseIds) async {
+    // 1. Find courses to ADD student to
+    final coursesToAdd = newCourseIds.where((id) => !oldCourseIds.contains(id)).toList();
+    
+    // 2. Find courses to REMOVE student from
+    final coursesToRemove = oldCourseIds.where((id) => !newCourseIds.contains(id)).toList();
+
+    final batch = _db.batch();
+
+    for (var courseId in coursesToAdd) {
+      final docRef = _db.collection('courses').doc(courseId);
+      batch.update(docRef, {
+        'studentIds': FieldValue.arrayUnion([studentId])
+      });
+    }
+
+    for (var courseId in coursesToRemove) {
+      final docRef = _db.collection('courses').doc(courseId);
+      batch.update(docRef, {
+        'studentIds': FieldValue.arrayRemove([studentId])
+      });
+    }
+
+    await batch.commit();
+  }
+
   Future<void> deleteUser(String uid) async {
     await _db.collection('users').doc(uid).delete();
   }
