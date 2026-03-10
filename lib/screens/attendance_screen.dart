@@ -1,7 +1,10 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
 import 'package:data_table_2/data_table_2.dart';
+import 'package:file_picker/file_picker.dart';
+import 'package:excel/excel.dart' as excel_pkg;
 import '../models/course_model.dart';
 import '../models/user_model.dart';
 import '../models/attendance_model.dart';
@@ -18,6 +21,8 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
   DateTime selectedDate = DateTime.now();
   List<UserModel> students = [];
   bool isLoadingStudents = false;
+  Map<String, AttendanceModel> _modifiedRecords = {};
+  bool _isSaving = false;
 
   @override
   void initState() {
@@ -48,25 +53,27 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
     final picked = await showTimePicker(
       context: context,
       initialTime: initial != null ? TimeOfDay.fromDateTime(initial) : TimeOfDay.now(),
+      initialEntryMode: TimePickerEntryMode.input,
     );
 
     if (picked != null) {
       final dt = DateTime(selectedDate.year, selectedDate.month, selectedDate.day, picked.hour, picked.minute);
       if (isInTime) {
-        _saveAttendance(service, record, checkInTime: dt);
+        setState(() => _stageAttendance(record, checkInTime: dt));
       } else {
-         _saveAttendance(service, record, checkOutTime: dt);
+         setState(() => _stageAttendance(record, checkOutTime: dt));
       }
     }
   }
 
-  void _saveAttendance(FirestoreService service, AttendanceModel record, {String? status, DateTime? checkInTime, DateTime? checkOutTime}) {
+  void _stageAttendance(AttendanceModel record, {String? status, DateTime? checkInTime, DateTime? checkOutTime}) {
     // Force courseId to 'general' if empty or not set, to match our "No Course" strategy
     final courseId = 'general'; 
+    final id = record.id.isEmpty ? '${courseId}_${record.studentId}_${DateFormat('yyyyMMdd').format(record.date)}' : record.id;
     
     final updated = AttendanceModel(
       // Ensure ID uniqueness logic matches the query
-      id: record.id.isEmpty ? '${courseId}_${record.studentId}_${DateFormat('yyyyMMdd').format(record.date)}' : record.id,
+      id: id,
       studentId: record.studentId,
       courseId: courseId, 
       date: record.date,
@@ -74,7 +81,202 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
       checkInTime: checkInTime ?? record.checkInTime,
       checkOutTime: checkOutTime ?? record.checkOutTime,
     );
-    service.saveAttendance(updated);
+    _modifiedRecords[id] = updated;
+  }
+
+  Future<void> _commitChanges(FirestoreService service) async {
+    if (_modifiedRecords.isEmpty) return;
+    setState(() => _isSaving = true);
+    try {
+      await Future.wait(_modifiedRecords.values.map((r) => service.saveAttendance(r)));
+      if (mounted) {
+        setState(() {
+          _modifiedRecords.clear();
+        });
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Changes saved successfully!')));
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error saving: $e')));
+      }
+    } finally {
+      if (mounted) setState(() => _isSaving = false);
+    }
+  }
+
+  void _showExcelFormatInfo(BuildContext context, FirestoreService service) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Excel Template Format', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.deepPurple)),
+        content: const Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Your Excel (.xlsx) file must contain these columns (case-insensitive, first row):'),
+            SizedBox(height: 16),
+            Text('• id        — Student\'s registered phone number', style: TextStyle(fontWeight: FontWeight.bold)),
+            Text('• checkin   — Check-in time (e.g., 09:30 AM or 14:00)', style: TextStyle(fontWeight: FontWeight.bold)),
+            Text('• checkout  — Check-out time (e.g., 05:00 PM or 17:00)', style: TextStyle(fontWeight: FontWeight.bold)),
+            SizedBox(height: 16),
+            Text('The date selected on screen will be used for all rows — no date column needed.', style: TextStyle(fontStyle: FontStyle.italic, color: Colors.deepPurple)),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.deepPurple, foregroundColor: Colors.white),
+            onPressed: () {
+              Navigator.pop(context);
+              _uploadExcelAttendance(service);
+            },
+            child: const Text('Continue to Upload'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _uploadExcelAttendance(FirestoreService service) async {
+    try {
+      FilePickerResult? result = await FilePicker.platform.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: ['xlsx'],
+        withData: true,
+      );
+
+      if (result != null) {
+        setState(() => isLoadingStudents = true);
+        var bytes = result.files.first.bytes;
+        if (bytes == null && result.files.first.path != null) {
+           bytes = File(result.files.first.path!).readAsBytesSync();
+        }
+        if (bytes == null) throw Exception("Could not read file data");
+
+        var excelData = excel_pkg.Excel.decodeBytes(bytes);
+        bool foundData = false;
+
+        // Fetch existing records for the selected date once
+        final existingRecords = await service.getDailyAttendance(selectedDate).first;
+
+        for (var table in excelData.tables.keys) {
+          var sheet = excelData.tables[table]!;
+          if (sheet.maxRows == 0) continue;
+
+          List<String> headers = [];
+          for (var cell in sheet.rows.first) {
+            headers.add(cell?.value?.toString().toLowerCase().trim() ?? '');
+          }
+
+          int idIdx = headers.indexWhere((h) => h == 'id' || h.contains('phone'));
+          int checkinIdx = headers.indexWhere((h) => h.contains('checkin') || h == 'in');
+          int checkoutIdx = headers.indexWhere((h) => h.contains('checkout') || h == 'out');
+
+          if (idIdx == -1) continue;
+
+          foundData = true;
+
+          for (int i = 1; i < sheet.maxRows; i++) {
+            var row = sheet.rows[i];
+            if (row.isEmpty || row[idIdx] == null) continue;
+
+            String valStr(dynamic cell) {
+               if (cell == null) return '';
+               return cell.value?.toString().trim() ?? '';
+            }
+
+            String phoneStr = valStr(row[idIdx]);
+            String checkinStr = checkinIdx != -1 ? valStr(row[checkinIdx]) : '';
+            String checkoutStr = checkoutIdx != -1 ? valStr(row[checkoutIdx]) : '';
+
+            if (phoneStr.isEmpty) continue;
+
+            UserModel? student;
+            try {
+              student = students.firstWhere((s) => s.phone != null && s.phone!.trim() == phoneStr);
+            } catch (_) {}
+            if (student == null) continue;
+
+            // Parse checkin time using selectedDate
+            DateTime? parsedCheckinTime;
+            try {
+              if (checkinStr.isNotEmpty) {
+                RegExp timeReg = RegExp(r'(\d{1,2}):(\d{2})');
+                var match = timeReg.firstMatch(checkinStr);
+                if (match != null) {
+                  int h = int.parse(match.group(1)!);
+                  int m = int.parse(match.group(2)!);
+                  if (checkinStr.toLowerCase().contains('pm') && h != 12) h += 12;
+                  if (checkinStr.toLowerCase().contains('am') && h == 12) h = 0;
+                  parsedCheckinTime = DateTime(selectedDate.year, selectedDate.month, selectedDate.day, h, m);
+                }
+              }
+            } catch (_) {}
+
+            // Parse checkout time using selectedDate
+            DateTime? parsedCheckoutTime;
+            try {
+              if (checkoutStr.isNotEmpty) {
+                RegExp timeReg = RegExp(r'(\d{1,2}):(\d{2})');
+                var match = timeReg.firstMatch(checkoutStr);
+                if (match != null) {
+                  int h = int.parse(match.group(1)!);
+                  int m = int.parse(match.group(2)!);
+                  if (checkoutStr.toLowerCase().contains('pm') && h != 12) h += 12;
+                  if (checkoutStr.toLowerCase().contains('am') && h == 12) h = 0;
+                  parsedCheckoutTime = DateTime(selectedDate.year, selectedDate.month, selectedDate.day, h, m);
+                }
+              }
+            } catch (_) {}
+
+            if (parsedCheckinTime == null && parsedCheckoutTime == null) continue;
+
+            final courseId = 'general';
+            final attendanceId = '${courseId}_${student.uid}_${DateFormat('yyyyMMdd').format(selectedDate)}';
+
+            // Find existing record or create a new one
+            final existing = existingRecords.firstWhere(
+              (r) => r.studentId == student!.uid,
+              orElse: () => AttendanceModel(
+                id: attendanceId,
+                studentId: student!.uid,
+                courseId: courseId,
+                date: selectedDate,
+                status: 'Absent',
+              ),
+            );
+
+            final updatedRecord = AttendanceModel(
+              id: attendanceId,
+              studentId: student.uid,
+              courseId: courseId,
+              date: selectedDate,
+              status: 'Present',
+              checkInTime: parsedCheckinTime ?? existing.checkInTime,
+              checkOutTime: parsedCheckoutTime ?? existing.checkOutTime,
+            );
+            await service.saveAttendance(updatedRecord);
+          }
+          break;
+        }
+
+        if (!foundData) throw Exception("Could not find 'id' column in the Excel sheet");
+
+        if (mounted) {
+          setState(() {});
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Excel imported and saved successfully!')));
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error importing Excel: $e')));
+      }
+    } finally {
+      if (mounted) setState(() => isLoadingStudents = false);
+    }
   }
 
   @override
@@ -112,6 +314,28 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
                     },
                   ),
                 ),
+                const SizedBox(width: 16),
+                SizedBox(
+                  height: 56, // Match TextField height approximately
+                  child: ElevatedButton.icon(
+                    onPressed: () => _showExcelFormatInfo(context, firestoreService),
+                    icon: const Icon(Icons.upload_file),
+                    label: const Text('Upload Excel'),
+                  ),
+                ),
+                const SizedBox(width: 16),
+                SizedBox(
+                  height: 56, // Match TextField height approximately
+                  child: ElevatedButton.icon(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: _modifiedRecords.isNotEmpty ? Colors.green : Colors.grey.shade400,
+                      foregroundColor: Colors.white,
+                    ),
+                    onPressed: _modifiedRecords.isEmpty || _isSaving ? null : () => _commitChanges(firestoreService),
+                    icon: _isSaving ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2)) : const Icon(Icons.save),
+                    label: Text(_isSaving ? 'Saving...' : 'Save Changes (${_modifiedRecords.length})'),
+                  ),
+                ),
               ],
             ),
             const SizedBox(height: 16),
@@ -137,16 +361,20 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
                           ],
                           rows: students.map((student) {
                             // Find existing record for this student on this day
-                            final record = records.firstWhere(
+                            final expectedId = 'general_${student.uid}_${DateFormat('yyyyMMdd').format(selectedDate)}';
+
+                            final streamRecord = records.firstWhere(
                               (r) => r.studentId == student.uid,
                               orElse: () => AttendanceModel(
-                                id: '',
+                                id: expectedId,
                                 studentId: student.uid,
                                 courseId: 'general',
                                 date: selectedDate,
                                 status: 'Absent',
                               ),
                             );
+
+                            final record = _modifiedRecords[expectedId] ?? streamRecord;
 
                             final isPresent = record.status == 'Present';
 
@@ -155,7 +383,7 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
                               DataCell(Checkbox(
                                 value: isPresent,
                                 onChanged: (val) {
-                                  _saveAttendance(firestoreService, record, status: (val == true) ? 'Present' : 'Absent');
+                                  setState(() => _stageAttendance(record, status: (val == true) ? 'Present' : 'Absent'));
                                 },
                               )),
                               DataCell(InkWell(

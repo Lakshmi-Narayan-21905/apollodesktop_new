@@ -10,6 +10,7 @@ class CourseModel {
   final DateTime createdAt;
   final List<String> subjects; // List of subject names or IDs
   final List<String> studentIds; // Enrolled students
+  final List<CourseMaterial> materials; // Uploaded materials
 
   CourseModel({
     required this.id,
@@ -21,6 +22,7 @@ class CourseModel {
     required this.createdAt,
     required this.subjects,
     required this.studentIds,
+    this.materials = const [],
   });
 
   factory CourseModel.fromMap(Map<String, dynamic> data, String id) {
@@ -34,6 +36,7 @@ class CourseModel {
       createdAt: data['createdAt'] != null ? (data['createdAt'] as Timestamp).toDate() : DateTime.now(),
       subjects: List<String>.from(data['subjects'] ?? []),
       studentIds: List<String>.from(data['studentIds'] ?? []),
+      materials: (data['materials'] as List<dynamic>?)?.map((e) => CourseMaterial.fromMap(Map<String, dynamic>.from(e))).toList() ?? [],
     );
   }
 
@@ -47,6 +50,7 @@ class CourseModel {
       'createdAt': Timestamp.fromDate(createdAt),
       'subjects': subjects,
       'studentIds': studentIds,
+      'materials': materials.map((e) => e.toMap()).toList(),
     };
   }
 
@@ -62,4 +66,25 @@ class CourseModel {
 
   @override
   int get hashCode => id.hashCode ^ title.hashCode ^ fees.hashCode;
+}
+
+class CourseMaterial {
+  final String name;
+  final String url;
+  
+  CourseMaterial({required this.name, required this.url});
+
+  factory CourseMaterial.fromMap(Map<String, dynamic> data) {
+    return CourseMaterial(
+      name: data['name'] ?? '',
+      url: data['url'] ?? '',
+    );
+  }
+
+  Map<String, dynamic> toMap() {
+    return {
+      'name': name,
+      'url': url,
+    };
+  }
 }

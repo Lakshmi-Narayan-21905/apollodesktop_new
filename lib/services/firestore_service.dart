@@ -1,10 +1,14 @@
+import 'dart:io';
+import 'dart:typed_data';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_storage/firebase_storage.dart';
 import '../models/user_model.dart';
 import '../models/course_model.dart'; // Will create
 import '../models/attendance_model.dart'; // Will create
 
 class FirestoreService {
   final FirebaseFirestore _db = FirebaseFirestore.instance;
+  final FirebaseStorage _storage = FirebaseStorage.instance;
 
   // Students
   Future<void> saveStudent(UserModel user) async {
@@ -138,6 +142,29 @@ class FirestoreService {
     }
 
     await batch.commit();
+  }
+
+  // Storage Methods Let's add material logic
+  Future<String> uploadCourseMaterial(String courseId, String fileName, {File? file, Uint8List? bytes}) async {
+    final ref = _storage.ref().child('courses/$courseId/materials/$fileName');
+    if (file != null) {
+       await ref.putFile(file);
+    } else if (bytes != null) {
+       // For web support where path handles aren't valid
+       await ref.putData(bytes);
+    } else {
+       throw Exception("Must provide either a file or bytes");
+    }
+    return await ref.getDownloadURL();
+  }
+
+  Future<void> deleteCourseMaterial(String courseId, String fileName) async {
+    try {
+      final ref = _storage.ref().child('courses/$courseId/materials/$fileName');
+      await ref.delete();
+    } catch (_) {
+      // Ignored if not found
+    }
   }
 
   Future<void> deleteUser(String uid) async {
