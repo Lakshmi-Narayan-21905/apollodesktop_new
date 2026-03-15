@@ -9,6 +9,7 @@ import 'courses_screen.dart';
 import 'attendance_screen.dart';
 import 'reports_screen.dart';
 import 'classroom_screen.dart';
+import 'assignments_screen.dart';
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
@@ -85,6 +86,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
               leading: const Icon(Icons.class_outlined),
               title: const Text('Classroom'),
               onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const ClassroomScreen())),
+            ),
+             ListTile(
+              leading: const Icon(Icons.assignment),
+              title: const Text('Assignments'),
+              onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const AssignmentsScreen())),
             ),
              ListTile(
               leading: const Icon(Icons.check_circle_outline),
@@ -193,6 +199,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   icon: Icons.class_,
                   label: 'Classroom',
                   onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const ClassroomScreen())),
+                ),
+                _QuickActionButton(
+                  icon: Icons.assignment_add,
+                  label: 'Assignments',
+                  onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const AssignmentsScreen())),
                 ),
                 _QuickActionButton(
                   icon: Icons.assignment_turned_in,

@@ -4,7 +4,8 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import '../models/user_model.dart';
 import '../models/course_model.dart'; // Will create
-import '../models/attendance_model.dart'; // Will create
+import '../models/attendance_model.dart';
+import '../models/assignment_model.dart';
 
 class FirestoreService {
   final FirebaseFirestore _db = FirebaseFirestore.instance;
@@ -169,5 +170,30 @@ class FirestoreService {
 
   Future<void> deleteUser(String uid) async {
     await _db.collection('users').doc(uid).delete();
+  }
+
+  // Assignments
+  Stream<List<AssignmentModel>> getAssignments() {
+    return _db.collection('assignments').orderBy('createdAt', descending: true).snapshots().map((snapshot) =>
+        snapshot.docs.map((doc) => AssignmentModel.fromMap(doc.data(), doc.id)).toList());
+  }
+
+  Stream<List<AssignmentModel>> getAssignmentsForCourse(String courseId) {
+    return _db.collection('assignments')
+        .where('courseId', isEqualTo: courseId)
+        .snapshots()
+        .map((snapshot) {
+           final list = snapshot.docs.map((doc) => AssignmentModel.fromMap(doc.data(), doc.id)).toList();
+           list.sort((a, b) => b.createdAt.compareTo(a.createdAt)); // Sort locally to avoid needing a Firestore Composite Index
+           return list;
+        });
+  }
+
+  Future<void> saveAssignment(AssignmentModel assignment) async {
+    await _db.collection('assignments').doc(assignment.id).set(assignment.toMap());
+  }
+
+  Future<void> deleteAssignment(String id) async {
+    await _db.collection('assignments').doc(id).delete();
   }
 }

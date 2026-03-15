@@ -104,6 +104,42 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
     }
   }
 
+  Future<void> _downloadExcelTemplate() async {
+    try {
+      var excel = excel_pkg.Excel.createExcel();
+      var sheetName = excel.getDefaultSheet();
+      if (sheetName != null) {
+        var sheet = excel[sheetName];
+        sheet.appendRow([
+          excel_pkg.TextCellValue('id'),
+          excel_pkg.TextCellValue('checkin'),
+          excel_pkg.TextCellValue('checkout'),
+        ]);
+      }
+      
+      var bytes = excel.save();
+      if (bytes != null) {
+        String? outputFile = await FilePicker.platform.saveFile(
+          dialogTitle: 'Save Excel Template',
+          fileName: 'Attendance_Template.xlsx',
+          type: FileType.custom,
+          allowedExtensions: ['xlsx'],
+        );
+
+        if (outputFile != null) {
+          File(outputFile).writeAsBytesSync(bytes);
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Template downloaded successfully!')));
+          }
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error downloading template: $e')));
+      }
+    }
+  }
+
   void _showExcelFormatInfo(BuildContext context, FirestoreService service) {
     showDialog(
       context: context,
@@ -122,18 +158,33 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
             Text('The date selected on screen will be used for all rows — no date column needed.', style: TextStyle(fontStyle: FontStyle.italic, color: Colors.deepPurple)),
           ],
         ),
+        actionsAlignment: MainAxisAlignment.spaceBetween,
         actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
-          ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: Colors.deepPurple, foregroundColor: Colors.white),
+          TextButton.icon(
             onPressed: () {
               Navigator.pop(context);
-              _uploadExcelAttendance(service);
+              _downloadExcelTemplate();
             },
-            child: const Text('Continue to Upload'),
+            icon: const Icon(Icons.download, color: Colors.deepPurple),
+            label: const Text('Download Template', style: TextStyle(color: Colors.deepPurple)),
+          ),
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('Cancel'),
+              ),
+              const SizedBox(width: 8),
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(backgroundColor: Colors.deepPurple, foregroundColor: Colors.white),
+                onPressed: () {
+                  Navigator.pop(context);
+                  _uploadExcelAttendance(service);
+                },
+                child: const Text('Continue to Upload'),
+              ),
+            ],
           ),
         ],
       ),
